@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ChevronRight, ChevronDown, Play, CheckCircle2, XCircle, Loader2, MessageSquare, Send, FileCode, Terminal, BookOpen, Lock, Check, Sparkles, ArrowLeft, Circle } from 'lucide-react';
+import { ChevronRight, ChevronDown, Play, CheckCircle2, XCircle, Loader2, MessageSquare, Send, FileCode, Terminal, BookOpen, Lock, Check, Sparkles, ArrowLeft, Circle, Crosshair, X } from 'lucide-react';
+import { validateWorkflow, simulateRun } from '../lib/validate';
 
 // ============================================================
 // MARKDOWN RENDERER
@@ -23,6 +24,93 @@ function renderMarkdown(text) {
     if (last < line.length) parts.push(line.slice(last));
     return <span key={i}>{parts}{i < arr.length - 1 && <br />}</span>;
   });
+}
+
+// ============================================================
+// REGION SELECTOR
+// ============================================================
+
+function RegionSelector({ screenshot, onCapture, onCancel }) {
+  const [start, setStart] = useState(null);
+  const [current, setCurrent] = useState(null);
+  const isDragging = useRef(false);
+
+  const getRect = () => {
+    if (!start || !current) return null;
+    return {
+      left:   Math.min(start.x, current.x),
+      top:    Math.min(start.y, current.y),
+      width:  Math.abs(current.x - start.x),
+      height: Math.abs(current.y - start.y),
+    };
+  };
+
+  const handleMouseDown = (e) => {
+    isDragging.current = true;
+    const pt = { x: e.clientX, y: e.clientY };
+    setStart(pt);
+    setCurrent(pt);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging.current) return;
+    setCurrent({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseUp = () => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    const rect = getRect();
+    if (!rect || rect.width < 10 || rect.height < 10) { onCancel(); return; }
+
+    const img = new Image();
+    img.onload = () => {
+      const scaleX = img.naturalWidth  / window.innerWidth;
+      const scaleY = img.naturalHeight / window.innerHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width  = rect.width  * scaleX;
+      canvas.height = rect.height * scaleY;
+      canvas.getContext('2d').drawImage(
+        img,
+        rect.left * scaleX, rect.top * scaleY,
+        canvas.width, canvas.height,
+        0, 0, canvas.width, canvas.height,
+      );
+      onCapture(canvas.toDataURL('image/png'));
+    };
+    img.src = screenshot;
+  };
+
+  const rect = getRect();
+
+  return (
+    <div
+      className="fixed inset-0 z-50 cursor-crosshair select-none"
+      style={{ backgroundImage: `url(${screenshot})`, backgroundSize: '100% 100%' }}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+    >
+      {/* dim layer — punched out by the selection box shadow */}
+      <div className="absolute inset-0 bg-black/40 pointer-events-none" />
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg px-4 py-2 text-sm text-stone-700 shadow-lg flex items-center gap-3 z-10">
+        <Crosshair className="w-4 h-4 text-indigo-500" />
+        Drag to select a region
+        <button
+          className="text-rose-500 hover:text-rose-600 font-medium"
+          onMouseDown={(e) => { e.stopPropagation(); onCancel(); }}
+        >
+          Cancel
+        </button>
+      </div>
+      {rect && rect.width > 2 && rect.height > 2 && (
+        <div
+          className="absolute z-10 border-2 border-indigo-400"
+          style={{ ...rect, boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }}
+        />
+      )}
+    </div>
+  );
 }
 
 // ============================================================
@@ -340,88 +428,13 @@ jobs:
 // ============================================================
 // VALIDATION ENGINE
 // ============================================================
-
-function validateWorkflow(yaml) {
-  const results = {};
-  const y = yaml.toLowerCase();
-
-  results.push_trigger = /on:\s*(\n\s+push|push)/m.test(yaml);
-  results.main_branch = /branches:[\s\S]*?-\s*main/.test(yaml);
-  results.job_named_greet = /^\s*greet:/m.test(yaml);
-  results.prints_hello = /hello,?\s*fde/i.test(yaml);
-  results.runs_on_ubuntu = /runs-on:\s*ubuntu/.test(yaml);
-
-  results.has_push_trigger = /(\bpush\b\s*:|\bpush\s*\n)/.test(yaml);
-  results.has_pr_trigger = /pull_request/.test(yaml);
-  results.has_dispatch = /workflow_dispatch/.test(yaml);
-
-  results.uses_secrets_context = /secrets\.API_KEY/i.test(yaml);
-  results.no_echo_secret = !/echo.*(secrets\.API_KEY|\$API_KEY|\$TOKEN)/i.test(yaml) || /env:/.test(yaml);
-
-  results.has_matrix = /strategy:\s*\n\s*matrix:/.test(yaml);
-  results.matrix_os = /ubuntu/.test(y) && /macos/.test(y);
-  results.matrix_node = /18/.test(yaml) && /20/.test(yaml);
-
-  // New rules for "Using GITHUB Context"
-  results.uses_github_sha = /github\.sha/i.test(yaml);
-  results.uses_github_actor = /github\.actor/i.test(yaml);
-
-  // New rules for "Uploading Build Artifacts"
-  results.uses_upload_artifact = /actions\/upload-artifact/i.test(yaml);
-  results.artifact_named_build = /name:\s*build\b/i.test(yaml);
-  results.uploads_zip = /path:\s*build\.zip/i.test(yaml);
-
-  return results;
-}
-
-function simulateRun(yaml, exercise) {
-  const logs = [];
-  logs.push({ t: 0, line: '▶ Workflow triggered by push event', kind: 'info' });
-  logs.push({ t: 400, line: '  Runner: ubuntu-latest (simulated)', kind: 'info' });
-  logs.push({ t: 700, line: '  Parsing workflow file...', kind: 'info' });
-
-  const hasYaml = yaml.trim().length > 0;
-  if (!hasYaml) {
-    logs.push({ t: 900, line: '✗ Error: workflow file is empty', kind: 'error' });
-    return { logs, success: false };
-  }
-
-  const validations = validateWorkflow(yaml);
-  const rules = exercise.validations;
-  const passed = rules.filter(r => validations[r.rule]);
-  const failed = rules.filter(r => !validations[r.rule]);
-
-  logs.push({ t: 1100, line: `  Found ${rules.length} validation rules`, kind: 'info' });
-  logs.push({ t: 1400, line: '  Simulating execution...', kind: 'info' });
-
-  let t = 1800;
-  rules.forEach((r) => {
-    const ok = validations[r.rule];
-    logs.push({
-      t,
-      line: `  ${ok ? '✓' : '✗'} ${r.description}`,
-      kind: ok ? 'success' : 'error',
-    });
-    t += 350;
-  });
-
-  const success = failed.length === 0;
-  logs.push({
-    t: t + 200,
-    line: success
-      ? `✓ All ${rules.length} checks passed. Exercise complete.`
-      : `✗ ${failed.length} of ${rules.length} checks failed. Review and try again.`,
-    kind: success ? 'success' : 'error',
-  });
-
-  return { logs, success, passed, failed };
-}
+// validateWorkflow and simulateRun are imported from ../lib/validate
 
 // ============================================================
 // CHATBOT
 // ============================================================
 
-async function askChatbot(messages, exercise, module_, learnerCode, lastRunResult) {
+async function askChatbot(messages, exercise, module_, learnerCode, lastRunResult, runLogs) {
   const systemPrompt = `You are a CI/CD tutor for Forward Deployed Engineers. You are helping the learner with this exercise:
 
 MODULE: ${module_.name}
@@ -454,6 +467,9 @@ ${learnerCode}
 ${lastRunResult ? `LAST RUN RESULT: ${lastRunResult.success ? 'PASSED' : 'FAILED'}
 ${lastRunResult.failed?.length ? 'Failed checks:\n' + lastRunResult.failed.map(f => `- ${f.description}`).join('\n') : 'All checks passed.'}
 ${lastRunResult.passed?.length ? 'Passing checks:\n' + lastRunResult.passed.map(f => `- ${f.description}`).join('\n') : ''}` : 'Learner has not run the workflow yet.'}
+
+${runLogs?.length ? `RUN LOG OUTPUT (what the learner sees in the terminal panel):
+${runLogs.map(l => l.line).join('\n')}` : ''}
 
 CRITICAL RULES:
 1. NEVER reveal or write out the full solution. Do not output a complete working YAML file.
@@ -764,7 +780,11 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [screenshot, setScreenshot] = useState(null);
   const logsRef = useRef(null);
+  const chatBottomRef = useRef(null);
 
   useEffect(() => {
     setCode(exercise.starter);
@@ -778,6 +798,10 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
   useEffect(() => {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
   }, [logs]);
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, chatLoading]);
 
   const runWorkflow = () => {
     setRunState('running');
@@ -797,15 +821,46 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
     }, totalTime);
   };
 
+  const startCapture = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        preferCurrentTab: true,
+      });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await new Promise(r => { video.onloadedmetadata = r; });
+      await video.play();
+      await new Promise(r => requestAnimationFrame(r));
+      const canvas = document.createElement('canvas');
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      stream.getTracks().forEach(t => t.stop());
+      setScreenshot(canvas.toDataURL('image/png'));
+      setIsSelecting(true);
+    } catch (e) {
+      if (e.name !== 'NotAllowedError') console.error('Screen capture failed:', e);
+    }
+  };
+
   const sendChatMessage = async () => {
-    if (!chatInput.trim() || chatLoading) return;
-    const userMsg = { role: 'user', content: chatInput };
+    if ((!chatInput.trim() && !selectedImage) || chatLoading) return;
+    const content = selectedImage
+      ? [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: selectedImage.split(',')[1] } },
+          { type: 'text', text: chatInput || 'What do you see in this screenshot?' },
+        ]
+      : chatInput;
+    const userMsg = { role: 'user', content };
     const newMessages = [...chatMessages, userMsg];
     setChatMessages(newMessages);
     setChatInput('');
+    setSelectedImage(null);
     setChatLoading(true);
     try {
-      const response = await askChatbot(newMessages, exercise, module_, code, runResult);
+      const response = await askChatbot(newMessages, exercise, module_, code, runResult, logs);
       setChatMessages([...newMessages, { role: 'assistant', content: response }]);
     } catch (e) {
       console.error('Tutor chatbot error:', e);
@@ -908,6 +963,13 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
 
   return (
     <div className="min-h-screen flex flex-col bg-stone-50">
+      {isSelecting && screenshot && (
+        <RegionSelector
+          screenshot={screenshot}
+          onCapture={(img) => { setSelectedImage(img); setIsSelecting(false); setScreenshot(null); }}
+          onCancel={() => { setIsSelecting(false); setScreenshot(null); }}
+        />
+      )}
       {/* Top bar */}
       <div className="border-b border-stone-200/70 px-6 py-3.5 flex items-center gap-6 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
         <button onClick={onBack} className="flex items-center gap-2 text-stone-500 hover:text-stone-900 transition-colors text-sm group">
@@ -1137,20 +1199,32 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
                 Stuck? Ask me anything about this exercise. I won't give you the answer — but I'll help you find it.
               </div>
             )}
-            {chatMessages.map((m, i) => (
-              <div key={i} className={m.role === 'user' ? '' : ''}>
-                <div className="text-[11px] font-medium mb-1.5 text-stone-400 uppercase tracking-wider">
-                  {m.role === 'user' ? 'You' : 'Tutor'}
+            {chatMessages.map((m, i) => {
+              const isArray = Array.isArray(m.content);
+              const imgPart  = isArray ? m.content.find(p => p.type === 'image') : null;
+              const textPart = isArray ? m.content.find(p => p.type === 'text')?.text : m.content;
+              return (
+                <div key={i}>
+                  <div className="text-[11px] font-medium mb-1.5 text-stone-400 uppercase tracking-wider">
+                    {m.role === 'user' ? 'You' : 'Tutor'}
+                  </div>
+                  <div className={`text-sm leading-relaxed rounded-xl p-3.5 ${
+                    m.role === 'user'
+                      ? 'bg-stone-50 text-stone-900 border border-stone-200/60'
+                      : 'bg-indigo-50/60 text-stone-800 border border-indigo-100/80'
+                  }`}>
+                    {imgPart && (
+                      <img
+                        src={`data:${imgPart.source.media_type};base64,${imgPart.source.data}`}
+                        alt="screenshot"
+                        className="rounded-lg mb-2 max-w-full border border-stone-200"
+                      />
+                    )}
+                    {m.role === 'user' ? textPart : renderMarkdown(textPart)}
+                  </div>
                 </div>
-                <div className={`text-sm leading-relaxed rounded-xl p-3.5 ${
-                  m.role === 'user'
-                    ? 'bg-stone-50 text-stone-900 border border-stone-200/60'
-                    : 'bg-indigo-50/60 text-stone-800 border border-indigo-100/80'
-                }`}>
-                  {m.role === 'user' ? m.content : renderMarkdown(m.content)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {chatLoading && (
               <div>
                 <div className="text-[11px] font-medium mb-1.5 text-stone-400 uppercase tracking-wider">Tutor</div>
@@ -1159,20 +1233,40 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
                 </div>
               </div>
             )}
+            <div ref={chatBottomRef} />
           </div>
           <div className="border-t border-stone-200/70 p-4 bg-stone-50/50">
+            {selectedImage && (
+              <div className="relative mb-2 inline-block">
+                <img src={selectedImage} alt="selection" className="h-20 rounded-lg border border-stone-200 object-cover" />
+                <button
+                  onClick={() => setSelectedImage(null)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-stone-700 hover:bg-stone-900 text-white rounded-full flex items-center justify-center transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
             <div className="flex gap-2">
+              <button
+                onClick={startCapture}
+                disabled={chatLoading}
+                title="Select a region of the screen"
+                className="px-2.5 bg-white border border-stone-200 hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed text-stone-500 hover:text-indigo-600 transition-all rounded-lg"
+              >
+                <Crosshair className="w-4 h-4" />
+              </button>
               <input
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendChatMessage())}
-                placeholder="Ask a question..."
+                placeholder={selectedImage ? 'Add a question about the screenshot...' : 'Ask a question...'}
                 disabled={chatLoading}
                 className="flex-1 bg-white border border-stone-200 px-3.5 py-2.5 text-sm text-stone-900 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 rounded-lg transition-all"
               />
               <button
                 onClick={sendChatMessage}
-                disabled={chatLoading || !chatInput.trim()}
+                disabled={chatLoading || (!chatInput.trim() && !selectedImage)}
                 className="px-3 bg-gradient-to-b from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all rounded-lg shadow-sm shadow-indigo-900/20 hover:shadow-md"
               >
                 <Send className="w-4 h-4" />
