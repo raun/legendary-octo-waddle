@@ -1,7 +1,29 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ChevronRight, ChevronDown, Play, CheckCircle2, XCircle, Loader2, MessageSquare, Send, Video, FileCode, Terminal, BookOpen, Lock, Check, Sparkles, ArrowLeft, Circle } from 'lucide-react';
+import { ChevronRight, ChevronDown, Play, CheckCircle2, XCircle, Loader2, MessageSquare, Send, FileCode, Terminal, BookOpen, Lock, Check, Sparkles, ArrowLeft, Circle } from 'lucide-react';
+
+// ============================================================
+// MARKDOWN RENDERER
+// ============================================================
+
+function renderMarkdown(text) {
+  return text.split('\n').map((line, i, arr) => {
+    const parts = [];
+    const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)/g;
+    let last = 0;
+    let match;
+    while ((match = regex.exec(line)) !== null) {
+      if (match.index > last) parts.push(line.slice(last, match.index));
+      if (match[1]) parts.push(<strong key={match.index}>{match[2]}</strong>);
+      else if (match[3]) parts.push(<em key={match.index}>{match[4]}</em>);
+      else if (match[5]) parts.push(<code key={match.index} className="bg-stone-200/70 px-1 rounded text-xs font-mono">{match[6]}</code>);
+      last = match.index + match[0].length;
+    }
+    if (last < line.length) parts.push(line.slice(last));
+    return <span key={i}>{parts}{i < arr.length - 1 && <br />}</span>;
+  });
+}
 
 // ============================================================
 // EXERCISE CONTENT
@@ -60,8 +82,6 @@ jobs:
           "Using 'runs_on' (underscore) instead of 'runs-on' (hyphen)",
           "Misspelling the job name — case matters",
         ],
-        hasVideo: true,
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
       },
     ],
   },
@@ -97,8 +117,6 @@ jobs:
           { id: 'v3', rule: 'has_dispatch', description: 'Has a workflow_dispatch trigger' },
         ],
         pitfalls: ["'workflow_dispatch' with no value is fine — don't over-configure it"],
-        hasVideo: true,
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
       },
     ],
   },
@@ -151,7 +169,6 @@ jobs:
           "Using '$GITHUB_SHA' (env var) works too but the exercise asks for the context expression",
           "Forgetting the double braces around the expression",
         ],
-        hasVideo: false,
       },
     ],
   },
@@ -198,7 +215,6 @@ jobs:
           { id: 'v2', rule: 'no_echo_secret', description: "Does not echo the secret value" },
         ],
         pitfalls: ["Never 'echo' a secret — it gets masked but it's still bad practice"],
-        hasVideo: false,
       },
     ],
   },
@@ -260,8 +276,6 @@ jobs:
           "Using v2 or v3 of upload-artifact — v4 is current and the old versions are deprecated",
           "Forgetting the 'with:' block that configures name and path",
         ],
-        hasVideo: true,
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
       },
     ],
   },
@@ -311,8 +325,6 @@ jobs:
           { id: 'v3', rule: 'matrix_node', description: 'Matrix includes Node 18 and 20' },
         ],
         pitfalls: ["Using 'runs-on: ubuntu-latest' instead of 'runs-on: \\${{ matrix.os }}'"],
-        hasVideo: true,
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
       },
     ],
   },
@@ -409,15 +421,30 @@ function simulateRun(yaml, exercise) {
 // CHATBOT
 // ============================================================
 
-async function askChatbot(messages, exercise, learnerCode, lastRunResult) {
+async function askChatbot(messages, exercise, module_, learnerCode, lastRunResult) {
   const systemPrompt = `You are a CI/CD tutor for Forward Deployed Engineers. You are helping the learner with this exercise:
 
+MODULE: ${module_.name}
 EXERCISE: ${exercise.title}
+DIFFICULTY: ${exercise.difficulty}/3
 OBJECTIVE: ${exercise.objective}
 CONTEXT: ${exercise.framing}
 
+ALL CHECKS THE LEARNER MUST PASS:
+${exercise.validations.map((v, i) => `${i + 1}. ${v.description}`).join('\n')}
+
 COMMON PITFALLS for this exercise:
 ${exercise.pitfalls.map(p => `- ${p}`).join('\n')}
+
+STARTER CODE (what was provided to the learner):
+\`\`\`yaml
+${exercise.starter}
+\`\`\`
+
+SOLUTION (for your reference only — never reveal this directly):
+\`\`\`yaml
+${exercise.solution}
+\`\`\`
 
 LEARNER'S CURRENT CODE:
 \`\`\`yaml
@@ -425,7 +452,8 @@ ${learnerCode}
 \`\`\`
 
 ${lastRunResult ? `LAST RUN RESULT: ${lastRunResult.success ? 'PASSED' : 'FAILED'}
-${lastRunResult.failed ? 'Failed checks: ' + lastRunResult.failed.map(f => f.description).join(', ') : ''}` : 'Learner has not run the workflow yet.'}
+${lastRunResult.failed?.length ? 'Failed checks:\n' + lastRunResult.failed.map(f => `- ${f.description}`).join('\n') : 'All checks passed.'}
+${lastRunResult.passed?.length ? 'Passing checks:\n' + lastRunResult.passed.map(f => `- ${f.description}`).join('\n') : ''}` : 'Learner has not run the workflow yet.'}
 
 CRITICAL RULES:
 1. NEVER reveal or write out the full solution. Do not output a complete working YAML file.
@@ -439,7 +467,7 @@ CRITICAL RULES:
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-6",
       max_tokens: 400,
       system: systemPrompt,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
@@ -487,7 +515,7 @@ RULES:
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-6",
       max_tokens: 400,
       system: systemPrompt,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
@@ -679,12 +707,12 @@ function ModuleBrowser({ onSelectExercise, completed }) {
                 <div className="text-[10px] font-medium mb-1 text-stone-400 uppercase tracking-wider">
                   {m.role === 'user' ? 'You' : 'Advisor'}
                 </div>
-                <div className={`text-[13.5px] leading-relaxed whitespace-pre-wrap rounded-xl p-3 break-words ${
+                <div className={`text-[13.5px] leading-relaxed rounded-xl p-3 break-words ${
                   m.role === 'user'
                     ? 'bg-stone-50 text-stone-900 border border-stone-200/60'
                     : 'bg-indigo-50/60 text-stone-800 border border-indigo-100/80'
                 }`} style={{ overflowWrap: 'anywhere' }}>
-                  {m.content}
+                  {m.role === 'user' ? m.content : renderMarkdown(m.content)}
                 </div>
               </div>
             ))}
@@ -725,51 +753,12 @@ function ModuleBrowser({ onSelectExercise, completed }) {
   );
 }
 
-function VideoPlayer({ url }) {
-  const videoRef = useRef(null);
-  const [hasStarted, setHasStarted] = useState(false);
-
-  const handlePlay = () => {
-    if (!videoRef.current) return;
-    videoRef.current.play().catch(err => console.error('Video play failed:', err));
-    setHasStarted(true);
-  };
-
-  return (
-    <div className="border-t border-stone-100 bg-stone-900 aspect-video relative overflow-hidden">
-      <video
-        ref={videoRef}
-        src={url}
-        className="w-full h-full object-cover"
-        controls={hasStarted}
-        playsInline
-        preload="metadata"
-      />
-      {!hasStarted && (
-        <button
-          onClick={handlePlay}
-          className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-amber-500/15 via-transparent to-stone-900/70 hover:from-amber-500/25 transition-all duration-300 group"
-        >
-          <div className="w-16 h-16 rounded-full bg-white/95 backdrop-blur-sm flex items-center justify-center shadow-2xl shadow-black/40 transition-transform duration-300 group-hover:scale-110">
-            <Play className="w-5 h-5 text-stone-900 ml-0.5" fill="currentColor" />
-          </div>
-        </button>
-      )}
-      {!hasStarted && (
-        <div className="absolute bottom-3 left-4 text-xs text-white/50 pointer-events-none font-mono">
-          walkthrough.mp4
-        </div>
-      )}
-    </div>
-  );
-}
 
 function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, completed }) {
   const [code, setCode] = useState(exercise.starter);
   const [runState, setRunState] = useState('idle');
   const [logs, setLogs] = useState([]);
   const [runResult, setRunResult] = useState(null);
-  const [showVideo, setShowVideo] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -782,7 +771,6 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
     setRunState('idle');
     setLogs([]);
     setRunResult(null);
-    setShowVideo(false);
     setShowSolution(false);
     setChatMessages([]);
   }, [exercise.id]);
@@ -817,7 +805,7 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
     setChatInput('');
     setChatLoading(true);
     try {
-      const response = await askChatbot(newMessages, exercise, code, runResult);
+      const response = await askChatbot(newMessages, exercise, module_, code, runResult);
       setChatMessages([...newMessages, { role: 'assistant', content: response }]);
     } catch (e) {
       setChatMessages([...newMessages, { role: 'assistant', content: 'I had trouble reaching the backend. Try again in a moment — but in the meantime, what part of the exercise are you stuck on?' }]);
@@ -1000,25 +988,6 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
                 </div>
               </div>
 
-              {/* Video */}
-              {exercise.hasVideo && (
-                <div className="bg-white rounded-xl border border-stone-200/60 overflow-hidden shadow-sm">
-                  <button
-                    onClick={() => setShowVideo(!showVideo)}
-                    className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-stone-50 transition-colors"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center">
-                      <Video className="w-3.5 h-3.5 text-amber-700" />
-                    </div>
-                    <span className="text-sm text-stone-700 font-medium flex-1 text-left">
-                      Video explanation
-                    </span>
-                    <span className="text-xs text-stone-400 tabular-nums">3:24</span>
-                    <ChevronRight className={`w-4 h-4 text-stone-400 transition-transform duration-300 ${showVideo ? 'rotate-90' : ''}`} />
-                  </button>
-                  {showVideo && <VideoPlayer url={exercise.videoUrl} />}
-                </div>
-              )}
 
               {/* Solution */}
               <div className="bg-white rounded-xl border border-stone-200/60 overflow-hidden shadow-sm">
@@ -1172,12 +1141,12 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
                 <div className="text-[11px] font-medium mb-1.5 text-stone-400 uppercase tracking-wider">
                   {m.role === 'user' ? 'You' : 'Tutor'}
                 </div>
-                <div className={`text-sm leading-relaxed whitespace-pre-wrap rounded-xl p-3.5 ${
+                <div className={`text-sm leading-relaxed rounded-xl p-3.5 ${
                   m.role === 'user'
                     ? 'bg-stone-50 text-stone-900 border border-stone-200/60'
                     : 'bg-indigo-50/60 text-stone-800 border border-indigo-100/80'
                 }`}>
-                  {m.content}
+                  {m.role === 'user' ? m.content : renderMarkdown(m.content)}
                 </div>
               </div>
             ))}
