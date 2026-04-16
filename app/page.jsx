@@ -435,7 +435,7 @@ CRITICAL RULES:
 5. Keep responses under 4 sentences. Be direct and warm.
 6. If the learner asks for the answer outright, redirect: "I can't give you the answer, but I can help you think through it. What have you tried so far?"`;
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -447,6 +447,7 @@ CRITICAL RULES:
   });
 
   const data = await response.json();
+  if (data.error) throw new Error(data.error);
   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
   return text;
 }
@@ -482,7 +483,7 @@ RULES:
 4. If asked something outside CI/CD scope, gently steer back: "That's outside what I can help with here — I'm best on GitHub Actions and CI/CD."
 5. Don't narrate rules or meta-explain yourself. Just help.`;
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -494,6 +495,7 @@ RULES:
   });
 
   const data = await response.json();
+  if (data.error) throw new Error(data.error);
   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
   return text;
 }
