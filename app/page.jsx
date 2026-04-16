@@ -808,7 +808,8 @@ function ExerciseView({ exercise, module: module_, onBack, onComplete, onNext, c
       const response = await askChatbot(newMessages, exercise, module_, code, runResult);
       setChatMessages([...newMessages, { role: 'assistant', content: response }]);
     } catch (e) {
-      setChatMessages([...newMessages, { role: 'assistant', content: 'I had trouble reaching the backend. Try again in a moment — but in the meantime, what part of the exercise are you stuck on?' }]);
+      console.error('Tutor chatbot error:', e);
+      setChatMessages([...newMessages, { role: 'assistant', content: `Error: ${e.message}` }]);
     } finally {
       setChatLoading(false);
     }
